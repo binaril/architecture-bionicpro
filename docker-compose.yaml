@@ -72,6 +72,24 @@ services:
       REACT_APP_KEYCLOAK_REALM: reports-realm
       REACT_APP_KEYCLOAK_CLIENT_ID: reports-frontend
 
+  # ── Backend API (C# ASP.NET Core) ───────────────────────────────────────────
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      ConnectionStrings__OlapDb: "Host=olap_db;Port=5432;Database=olap_db;Username=olap_user;Password=olap_password"
+      Keycloak__Authority: "http://keycloak:8080/realms/reports-realm"
+    depends_on:
+      olap_db:
+        condition: service_healthy
+      keycloak:
+        condition: service_started
+    restart: unless-stopped
+
   # ── Target: OLAP database ────────────────────────────────────────────────────
 
   olap_db:
