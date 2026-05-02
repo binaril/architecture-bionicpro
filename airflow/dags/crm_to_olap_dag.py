@@ -3,7 +3,7 @@ DAG: crm_to_olap
 Schedule: every hour
 
 Reads customers from a CSV file (CRM export) and incrementally loads them
-into the OLAP database:
+into the OLAP database (ClickHouse):
   /opt/airflow/data/customers.csv  →  stg_customers  →  dim_customers
 """
 
@@ -16,12 +16,11 @@ from datetime import datetime, timedelta
 
 from airflow import DAG
 from airflow.operators.python import PythonOperator
-from airflow.providers.postgres.hooks.postgres import PostgresHook
+from clickhouse_driver import Client
 
 logger = logging.getLogger(__name__)
 
-OLAP_CONN_ID  = "olap_db"
-CSV_PATH      = "/opt/airflow/data/customers.csv"
+CSV_PATH = "/opt/airflow/data/customers.csv"
 
 default_args = {
     "owner": "data_engineer",
@@ -33,8 +32,18 @@ default_args = {
 }
 
 
+def get_ch_client() -> Client:
+    return Client(
+        host=os.environ.get("CLICKHOUSE_HOST", "olap_db"),
+        port=int(os.environ.get("CLICKHOUSE_PORT", 9000)),
+        database=os.environ.get("CLICKHOUSE_DB", "olap_db"),
+        user=os.environ.get("CLICKHOUSE_USER", "olap_user"),
+        password=os.environ.get("CLICKHOUSE_PASSWORD", "olap_password"),
+    )
+
+
 def extract_load_customers(**_):
-    """Read customers.csv and upsert rows into stg_customers."""
+    """Read customers.csv and insert rows into stg_customers."""
     if not os.path.exists(CSV_PATH):
         raise FileNotFoundError(f"CRM CSV not found: {CSV_PATH}")
 
@@ -52,42 +61,22 @@ def extract_load_customers(**_):
 
     logger.info("Loaded %d row(s) from %s", len(rows), CSV_PATH)
 
-    olap   = PostgresHook(postgres_conn_id=OLAP_CONN_ID)
-    conn   = olap.get_conn()
-    cursor = conn.cursor()
-
-    cursor.executemany(
-        """
-        INSERT INTO stg_customers
-            (customer_id, name, email, loaded_at)
-        VALUES (%s, %s, %s, NOW())
-        ON CONFLICT (customer_id) DO UPDATE SET
-            name      = EXCLUDED.name,
-            email     = EXCLUDED.email,
-            loaded_at = NOW()
-        """,
+    client = get_ch_client()
+    client.execute(
+        "INSERT INTO stg_customers (customer_id, name, email) VALUES",
         rows,
     )
-    conn.commit()
-    cursor.close()
-    conn.close()
-
     logger.info("stg_customers updated: %d row(s)", len(rows))
 
 
 def upsert_dim_customers(**_):
     """Merge stg_customers into dim_customers."""
-    olap = PostgresHook(postgres_conn_id=OLAP_CONN_ID)
-    olap.run(
+    client = get_ch_client()
+    client.execute(
         """
-        INSERT INTO dim_customers
-            (customer_id, name, email, is_current, loaded_at)
-        SELECT customer_id, name, email, TRUE, NOW()
-        FROM   stg_customers
-        ON CONFLICT (customer_id) DO UPDATE SET
-            name      = EXCLUDED.name,
-            email     = EXCLUDED.email,
-            loaded_at = NOW()
+        INSERT INTO dim_customers (customer_id, name, email, is_current)
+        SELECT customer_id, name, email, 1
+        FROM stg_customers FINAL
         """
     )
     logger.info("dim_customers upserted")
@@ -95,26 +84,22 @@ def upsert_dim_customers(**_):
 
 def load_fct_telemetry(**_):
     """Insert new telemetry rows from stg_telemetry into fct_telemetry."""
-    olap = PostgresHook(postgres_conn_id=OLAP_CONN_ID)
-    olap.run(
+    client = get_ch_client()
+    client.execute(
         """
         INSERT INTO fct_telemetry
-            (event_id, device_sk, customer_sk, customer_id,
-             device_serial, event_type, event_value, recorded_at, loaded_at)
+            (event_id, customer_id, device_id, device_serial, event_type, event_value, recorded_at)
         SELECT
             s.event_id,
-            dd.device_sk,
-            dc.customer_sk,
-            dc.customer_id,
+            dd.customer_id,
+            dd.device_id,
             s.device_serial,
             s.event_type,
             s.event_value,
-            s.recorded_at,
-            NOW()
-        FROM       stg_telemetry  s
-        LEFT JOIN  dim_devices    dd ON dd.device_serial = s.device_serial
-        LEFT JOIN  dim_customers  dc ON dc.customer_id   = dd.customer_id
-        ON CONFLICT (event_id) DO NOTHING
+            s.recorded_at
+        FROM (SELECT * FROM stg_telemetry FINAL) AS s
+        LEFT JOIN (SELECT * FROM dim_devices FINAL) AS dd ON dd.device_serial = s.device_serial
+        WHERE s.event_id NOT IN (SELECT event_id FROM fct_telemetry)
         """
     )
     logger.info("fct_telemetry loaded")
@@ -125,8 +110,8 @@ def load_fct_telemetry(**_):
 with DAG(
     dag_id="crm_to_olap",
     default_args=default_args,
-    description="ETL: CRM CSV → OLAP (staging + dimensions + facts)",
-    schedule_interval="0 * * * *",   # каждый час
+    description="ETL: CRM CSV → OLAP ClickHouse (staging + dimensions + facts)",
+    schedule_interval="0 * * * *",
     start_date=datetime(2024, 1, 1),
     catchup=False,
     tags=["etl", "crm", "olap"],

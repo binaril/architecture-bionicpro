@@ -9,7 +9,11 @@ x-airflow-common: &airflow-common
     AIRFLOW__CORE__FERNET_KEY: "46BKJoQYlPPOexq0OhDZnIlNepKFf87WFwLt0nIe3aI="
     AIRFLOW__WEBSERVER__SECRET_KEY: "change_me_in_production"
     AIRFLOW__CORE__LOAD_EXAMPLES: "false"
-    AIRFLOW_CONN_OLAP_DB: "postgresql://olap_user:olap_password@olap_db:5432/olap_db"
+    CLICKHOUSE_HOST: olap_db
+    CLICKHOUSE_PORT: "9000"
+    CLICKHOUSE_DB: olap_db
+    CLICKHOUSE_USER: olap_user
+    CLICKHOUSE_PASSWORD: olap_password
   volumes:
     - ./airflow/dags:/opt/airflow/dags
     - ./airflow/requirements.txt:/requirements.txt:ro
@@ -81,7 +85,7 @@ services:
     ports:
       - "8000:8000"
     environment:
-      ConnectionStrings__OlapDb: "Host=olap_db;Port=5432;Database=olap_db;Username=olap_user;Password=olap_password"
+      ConnectionStrings__OlapDb: "Host=olap_db;Port=8123;Username=olap_user;Password=olap_password;Database=olap_db"
       Keycloak__Authority: "http://keycloak:8080/realms/reports-realm"
     depends_on:
       olap_db:
@@ -90,21 +94,23 @@ services:
         condition: service_started
     restart: unless-stopped
 
-  # ── Target: OLAP database ────────────────────────────────────────────────────
+  # ── Target: OLAP database (ClickHouse) ──────────────────────────────────────
 
   olap_db:
-    image: postgres:14
+    image: clickhouse/clickhouse-server:24.3
     environment:
-      POSTGRES_DB: olap_db
-      POSTGRES_USER: olap_user
-      POSTGRES_PASSWORD: olap_password
+      CLICKHOUSE_DB: olap_db
+      CLICKHOUSE_USER: olap_user
+      CLICKHOUSE_PASSWORD: olap_password
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
     volumes:
       - ./sql/olap_init.sql:/docker-entrypoint-initdb.d/init.sql:ro
-      - olap_data:/var/lib/postgresql/data
+      - olap_data:/var/lib/clickhouse
     ports:
-      - "5435:5432"
+      - "8123:8123"
+      - "9000:9000"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U olap_user -d olap_db"]
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8123/ping || exit 1"]
       interval: 10s
       retries: 5
 
