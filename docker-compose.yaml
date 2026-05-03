@@ -29,6 +29,17 @@ services:
 
   # ── Identity & auth ──────────────────────────────────────────────────────────
 
+  openldap:
+    build:
+      context: ./ldap
+      dockerfile: Dockerfile
+    environment:
+      LDAP_DOMAIN: "example.com"
+      LDAP_ORGANISATION: "Example"
+      LDAP_ADMIN_PASSWORD: "admin"
+    ports:
+      - "389:389"
+
   keycloak_db:
     image: postgres:14
     environment:
@@ -63,6 +74,8 @@ services:
     depends_on:
       keycloak_db:
         condition: service_healthy
+      openldap:
+        condition: service_started
 
   frontend:
     build:
@@ -139,13 +152,7 @@ services:
       bash -c "
         pip install --no-cache-dir -r /requirements.txt &&
         airflow db migrate &&
-        airflow users create
-          --username admin
-          --password admin
-          --firstname Admin
-          --lastname User
-          --role Admin
-          --email admin@bionic.pro
+        airflow users create --username admin --password admin --firstname Admin --lastname User --role Admin --email admin@bionic.pro
       "
     restart: "no"
 
