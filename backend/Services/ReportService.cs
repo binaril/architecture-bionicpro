@@ -60,7 +60,8 @@ public class ReportService : IReportService
             LastEventAt   = reader.IsDBNull(14) ? null : reader.GetDateTime(14),
             Events30d     = reader.GetInt64(15),
             AvgValue30d   = reader.IsDBNull(16) ? null : reader.GetDecimal(16),
-            EventsByType  = reader.IsDBNull(17) ? null
+            EventsByType  = reader.IsDBNull(17) || string.IsNullOrWhiteSpace(reader.GetString(17))
+                ? new Dictionary<string, object>()
                 : JsonSerializer.Deserialize<Dictionary<string, object>>(reader.GetString(17)),
             MartUpdatedAt = reader.GetDateTime(18)
         };
