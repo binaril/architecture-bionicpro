@@ -68,3 +68,6 @@ docker compose ps
 - `Task1/BionicPRO_C4_model.drawio.png` — C4 для управления учётными данными (LDAP + IdP + PKCE)
 - `Task2/BionicPRO_C4_model_2.drawio.png` — C4 для сервиса отчётов (ETL + OLAP + API)
 
+
+Проверил на другом ПК, запустилось все ок. Были только проблемы с openldap из-за скрытых символов в entrypoint.sh, после корректировки норм
+Так же приложил скриншоты в папке screenshots
