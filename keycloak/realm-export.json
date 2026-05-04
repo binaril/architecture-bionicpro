@@ -114,9 +114,13 @@
         "clientId": "reports-frontend",
         "enabled": true,
         "publicClient": true,
+        "standardFlowEnabled": true,
+        "directAccessGrantsEnabled": false,
+        "attributes": {
+          "pkce.code.challenge.method": "S256"
+        },
         "redirectUris": ["http://localhost:3000/*"],
-        "webOrigins": ["http://localhost:3000"],
-        "directAccessGrantsEnabled": true
+        "webOrigins": ["http://localhost:3000"]
       },
       {
         "clientId": "reports-api",
@@ -125,5 +129,99 @@
         "secret": "oNwoLQdvJAvRcL89SydqCWCe5ry1jMgq", 
         "bearerOnly": true
       }
-    ]
+    ],
+    "components": {
+      "org.keycloak.storage.UserStorageProvider": [
+        {
+          "id": "ldap-provider",
+          "name": "ldap",
+          "providerId": "ldap",
+          "subComponents": {
+            "org.keycloak.storage.ldap.mappers.LDAPStorageMapper": [
+              {
+                "id": "username-mapper",
+                "name": "username",
+                "providerId": "user-attribute-ldap-mapper",
+                "config": {
+                  "ldap.attribute": ["uid"],
+                  "user.model.attribute": ["username"],
+                  "read.only": ["true"],
+                  "always.read.value.from.ldap": ["false"],
+                  "is.mandatory.in.ldap": ["true"]
+                }
+              },
+              {
+                "id": "email-mapper",
+                "name": "email",
+                "providerId": "user-attribute-ldap-mapper",
+                "config": {
+                  "ldap.attribute": ["mail"],
+                  "user.model.attribute": ["email"],
+                  "read.only": ["true"],
+                  "always.read.value.from.ldap": ["false"],
+                  "is.mandatory.in.ldap": ["false"]
+                }
+              },
+              {
+                "id": "first-name-mapper",
+                "name": "first name",
+                "providerId": "user-attribute-ldap-mapper",
+                "config": {
+                  "ldap.attribute": ["cn"],
+                  "user.model.attribute": ["firstName"],
+                  "read.only": ["true"],
+                  "always.read.value.from.ldap": ["false"],
+                  "is.mandatory.in.ldap": ["false"]
+                }
+              },
+              {
+                "id": "last-name-mapper",
+                "name": "last name",
+                "providerId": "user-attribute-ldap-mapper",
+                "config": {
+                  "ldap.attribute": ["sn"],
+                  "user.model.attribute": ["lastName"],
+                  "read.only": ["true"],
+                  "always.read.value.from.ldap": ["false"],
+                  "is.mandatory.in.ldap": ["false"]
+                }
+              }
+            ]
+          },
+          "config": {
+            "enabled": ["true"],
+            "priority": ["0"],
+            "fullSyncPeriod": ["-1"],
+            "changedSyncPeriod": ["-1"],
+            "cachePolicy": ["DEFAULT"],
+            "batchSizeForSync": ["1000"],
+            "editMode": ["READ_ONLY"],
+            "importEnabled": ["true"],
+            "syncRegistrations": ["false"],
+            "vendor": ["other"],
+            "usernameLDAPAttribute": ["uid"],
+            "rdnLDAPAttribute": ["uid"],
+            "uuidLDAPAttribute": ["entryUUID"],
+            "userObjectClasses": ["inetOrgPerson"],
+            "connectionUrl": ["ldap://openldap:389"],
+            "usersDn": ["ou=People,dc=example,dc=com"],
+            "authType": ["simple"],
+            "bindDn": ["cn=admin,dc=example,dc=com"],
+            "bindCredential": ["admin"],
+            "searchScope": ["1"],
+            "tls": ["false"],
+            "startTls": ["false"],
+            "useTruststoreSpi": ["ldapsOnly"],
+            "connectionPooling": ["true"],
+            "pagination": ["true"],
+            "allowKerberosAuthentication": ["false"],
+            "useKerberosForPasswordAuthentication": ["false"],
+            "debug": ["false"],
+            "usePasswordModifyExtendedOp": ["false"],
+            "validatePasswordPolicy": ["false"],
+            "trustEmail": ["false"]
+          }
+        }
+      ]
+    }
   }

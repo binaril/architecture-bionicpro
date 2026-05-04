@@ -1,6 +1,45 @@
 version: '3.8'
 
+# ── Shared Airflow environment ────────────────────────────────────────────────
+x-airflow-common: &airflow-common
+  image: apache/airflow:2.8.1
+  environment: &airflow-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow_db/airflow
+    AIRFLOW__CORE__FERNET_KEY: "46BKJoQYlPPOexq0OhDZnIlNepKFf87WFwLt0nIe3aI="
+    AIRFLOW__WEBSERVER__SECRET_KEY: "change_me_in_production"
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    CLICKHOUSE_HOST: olap_db
+    CLICKHOUSE_PORT: "9000"
+    CLICKHOUSE_DB: default
+    CLICKHOUSE_USER: olap_user
+    CLICKHOUSE_PASSWORD: olap_password
+  volumes:
+    - ./airflow/dags:/opt/airflow/dags
+    - ./airflow/requirements.txt:/requirements.txt:ro
+    - ./data:/opt/airflow/data:ro
+    - airflow_logs:/opt/airflow/logs
+  depends_on:
+    airflow_db:
+      condition: service_healthy
+    olap_db:
+      condition: service_healthy
+
 services:
+
+  # ── Identity & auth ──────────────────────────────────────────────────────────
+
+  openldap:
+    build:
+      context: ./ldap
+      dockerfile: Dockerfile
+    environment:
+      LDAP_DOMAIN: "example.com"
+      LDAP_ORGANISATION: "Example"
+      LDAP_ADMIN_PASSWORD: "admin"
+    ports:
+      - "389:389"
+
   keycloak_db:
     image: postgres:14
     environment:
@@ -11,6 +50,11 @@ services:
       - ./postgres-keycloak-data:/var/lib/postgresql/data
     ports:
       - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U keycloak_user -d keycloak_db"]
+      interval: 10s
+      retries: 5
+
   keycloak:
     image: quay.io/keycloak/keycloak:21.1
     environment:
@@ -20,7 +64,7 @@ services:
       KC_DB_URL: jdbc:postgresql://keycloak_db:5432/keycloak_db
       KC_DB_USERNAME: keycloak_user
       KC_DB_PASSWORD: keycloak_password
-    command: 
+    command:
       - start-dev
       - --import-realm
     volumes:
@@ -28,7 +72,11 @@ services:
     ports:
       - "8080:8080"
     depends_on:
-      - keycloak_db
+      keycloak_db:
+        condition: service_healthy
+      openldap:
+        condition: service_started
+
   frontend:
     build:
       context: ./frontend
@@ -40,3 +88,100 @@ services:
       REACT_APP_KEYCLOAK_URL: http://localhost:8080
       REACT_APP_KEYCLOAK_REALM: reports-realm
       REACT_APP_KEYCLOAK_CLIENT_ID: reports-frontend
+
+  # ── Backend API (C# ASP.NET Core) ───────────────────────────────────────────
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      ConnectionStrings__OlapDb: "Host=olap_db;Port=8123;Username=olap_user;Password=olap_password;Database=default"
+      Keycloak__Authority: "http://localhost:8080/realms/reports-realm"
+      Keycloak__MetadataAddress: "http://keycloak:8080/realms/reports-realm/.well-known/openid-configuration"
+    depends_on:
+      olap_db:
+        condition: service_healthy
+      keycloak:
+        condition: service_started
+    restart: unless-stopped
+
+  # ── Target: OLAP database (ClickHouse) ──────────────────────────────────────
+
+  olap_db:
+    image: clickhouse/clickhouse-server:24.3
+    environment:
+      CLICKHOUSE_DB: default
+      CLICKHOUSE_USER: olap_user
+      CLICKHOUSE_PASSWORD: olap_password
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    volumes:
+      - ./sql/olap_init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - olap_data:/var/lib/clickhouse
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8123/ping || exit 1"]
+      interval: 10s
+      retries: 5
+
+  # ── Airflow metadata database ────────────────────────────────────────────────
+
+  airflow_db:
+    image: postgres:14
+    environment:
+      POSTGRES_DB: airflow
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+    volumes:
+      - airflow_db_data:/var/lib/postgresql/data
+    ports:
+      - "5436:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U airflow -d airflow"]
+      interval: 10s
+      retries: 5
+
+  # ── Airflow: one-shot initialisation ────────────────────────────────────────
+
+  airflow-init:
+    <<: *airflow-common
+    command: >
+      bash -c "
+        pip install --no-cache-dir -r /requirements.txt &&
+        airflow db migrate &&
+        airflow users create --username admin --password admin --firstname Admin --lastname User --role Admin --email admin@bionic.pro
+      "
+    restart: "no"
+
+  # ── Airflow: web UI  (http://localhost:8088  admin/admin) ────────────────────
+
+  airflow-webserver:
+    <<: *airflow-common
+    command: >
+      bash -c "pip install --no-cache-dir -r /requirements.txt && airflow webserver"
+    ports:
+      - "8088:8080"
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # ── Airflow: scheduler ───────────────────────────────────────────────────────
+
+  airflow-scheduler:
+    <<: *airflow-common
+    command: >
+      bash -c "pip install --no-cache-dir -r /requirements.txt && airflow scheduler"
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+volumes:
+  olap_data:
+  airflow_db_data:
+  airflow_logs:
