@@ -1,4 +1,4 @@
-#!/bin/sh
+о#!/bin/sh
 set -e
 
 DOMAIN="${LDAP_DOMAIN:-example.com}"
